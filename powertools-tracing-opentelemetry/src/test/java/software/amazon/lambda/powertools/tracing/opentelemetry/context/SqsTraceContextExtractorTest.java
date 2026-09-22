@@ -21,7 +21,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-import com.amazonaws.services.lambda.runtime.events.SNSEvent;
+import com.amazonaws.services.lambda.runtime.events.SQSEvent;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.api.trace.SpanKind;
@@ -39,7 +39,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
-class SnsTraceContextExtractorTest {
+class SqsTraceContextExtractorTest {
 
     @Mock
     private Span span;
@@ -48,27 +48,27 @@ class SnsTraceContextExtractorTest {
     private TextMapPropagator propagator;
 
     @InjectMocks
-    private SnsTraceContextExtractor extractor;
+    private SqsTraceContextExtractor extractor;
 
     @Test
-    void shouldSupportSnsEvent() {
-        SNSEvent snsEvent = new SNSEvent();
+    void shouldSupportSqsEvent() {
+        SQSEvent sqsEvent = new SQSEvent();
 
-        boolean result = extractor.supports(snsEvent);
+        boolean result = extractor.supports(sqsEvent);
 
         assertThat(result).isTrue();
     }
 
     @Test
-    void shouldNotSupportNonSnsEvent() {
-        assertThat(extractor.supports("Some non-SNS event")).isFalse();
+    void shouldNotSupportNonSqsEvent() {
+        assertThat(extractor.supports("Some non-SQS event")).isFalse();
         assertThat(extractor.supports(new Object())).isFalse();
         assertThat(extractor.supports(null)).isFalse();
     }
 
     @Test
     void shouldExtractTraceContextWithConsumerSpanKindWhenRecordsIsNull() {
-        SNSEvent event = new SNSEvent();
+        SQSEvent event = new SQSEvent();
         event.setRecords(null);
         Context parentContext = Context.current();
 
@@ -82,7 +82,7 @@ class SnsTraceContextExtractorTest {
 
     @Test
     void shouldExtractTraceContextWithConsumerSpanKindWhenRecordsIsEmpty() {
-        SNSEvent event = new SNSEvent();
+        SQSEvent event = new SQSEvent();
         event.setRecords(Collections.emptyList());
         Context parentContext = Context.current();
 
@@ -95,25 +95,21 @@ class SnsTraceContextExtractorTest {
     }
 
     @Test
-    void shouldExtractTraceContextFromSnsEvent() {
+    void shouldExtractTraceContextFromSqsEvent() {
         String traceId = "4bf92f3577b34da6a3ce929d0e0e4736";
         String spanId = "00f067aa0ba902b7";
 
-        SNSEvent.MessageAttribute traceparent = new SNSEvent.MessageAttribute();
-        traceparent.setType("String");
-        traceparent.setValue("00-" + traceId + "-" + spanId + "-01");
+        SQSEvent.MessageAttribute traceparent = new SQSEvent.MessageAttribute();
+        traceparent.setStringValue("00-" + traceId + "-" + spanId + "-01");
 
-        Map<String, SNSEvent.MessageAttribute> messageAttributes = new HashMap<>();
+        Map<String, SQSEvent.MessageAttribute> messageAttributes = new HashMap<>();
         messageAttributes.put("traceparent", traceparent);
 
-        SNSEvent.SNS sns = new SNSEvent.SNS();
-        sns.setMessageAttributes(messageAttributes);
+        SQSEvent.SQSMessage message = new SQSEvent.SQSMessage();
+        message.setMessageAttributes(messageAttributes);
 
-        SNSEvent.SNSRecord record = new SNSEvent.SNSRecord();
-        record.setSns(sns);
-
-        SNSEvent event = new SNSEvent();
-        event.setRecords(List.of(record));
+        SQSEvent event = new SQSEvent();
+        event.setRecords(List.of(message));
 
         ExtractedTraceContext extractedContext = extractor.extract(
                 event,
@@ -133,7 +129,7 @@ class SnsTraceContextExtractorTest {
 
     @Test
     void shouldNotEnrichSpanWhenRecordsIsNull() {
-        SNSEvent event = new SNSEvent();
+        SQSEvent event = new SQSEvent();
         event.setRecords(null);
 
         extractor.enrichSpan(event, span);
@@ -143,7 +139,7 @@ class SnsTraceContextExtractorTest {
 
     @Test
     void shouldNotEnrichSpanWhenRecordsIsEmpty() {
-        SNSEvent event = new SNSEvent();
+        SQSEvent event = new SQSEvent();
         event.setRecords(Collections.emptyList());
 
         extractor.enrichSpan(event, span);
@@ -152,76 +148,65 @@ class SnsTraceContextExtractorTest {
     }
 
     @Test
-    void shouldNotEnrichSpanWhenAllRecordsAreNull() {
-        SNSEvent event = new SNSEvent();
-        event.setRecords(Collections.singletonList(null));
+    void shouldEnrichSpanWithSqsMetadata() {
+        SQSEvent.SQSMessage message = new SQSEvent.SQSMessage();
+        message.setEventSourceArn("arn:aws:sqs:us-east-1:123456789012:test-queue");
+
+        SQSEvent event = new SQSEvent();
+        event.setRecords(List.of(message));
 
         extractor.enrichSpan(event, span);
 
-        verifyNoInteractions(span);
+        verify(span).setAttribute("messaging.system", "aws.sqs");
+        verify(span).setAttribute("messaging.batch.message_count", 1);
+        verify(span).setAttribute("messaging.destination.name", "test-queue");
     }
 
     @Test
-    void shouldNotEnrichSpanWhenSnsIsNull() {
-        SNSEvent.SNSRecord record = new SNSEvent.SNSRecord();
-        record.setSns(null);
+    void shouldEnrichSpanWithQueueNameFromArnWithoutColon() {
+        SQSEvent.SQSMessage message = new SQSEvent.SQSMessage();
+        message.setEventSourceArn("queue-name-without-separator");
 
-        SNSEvent event = new SNSEvent();
-        event.setRecords(List.of(record));
+        SQSEvent event = new SQSEvent();
+        event.setRecords(List.of(message));
 
         extractor.enrichSpan(event, span);
 
-        verifyNoInteractions(span);
+        verify(span).setAttribute("messaging.system", "aws.sqs");
+        verify(span).setAttribute("messaging.batch.message_count", 1);
+        verify(span).setAttribute("messaging.destination.name", "queue-name-without-separator");
     }
 
     @Test
-    void shouldEnrichSpanWithSnsMetadata() {
-        SNSEvent.SNS sns = new SNSEvent.SNS();
-        sns.setTopicArn("arn:aws:sns:us-east-1:123456789012:test-topic");
+    void shouldNotEnrichSpanWithDestinationNameWhenEventSourceArnIsNull() {
+        SQSEvent.SQSMessage message = new SQSEvent.SQSMessage();
+        message.setEventSourceArn(null);
 
-        SNSEvent.SNSRecord record = new SNSEvent.SNSRecord();
-        record.setSns(sns);
-
-        SNSEvent event = new SNSEvent();
-        event.setRecords(List.of(record));
+        SQSEvent event = new SQSEvent();
+        event.setRecords(List.of(message));
 
         extractor.enrichSpan(event, span);
 
-        verify(span).setAttribute("messaging.system", "aws.sns");
-        verify(span).setAttribute("messaging.destination.name", "test-topic");
-    }
-
-    @Test
-    void shouldEnrichSpanWithTopicNameFromArnWithoutColon() {
-        SNSEvent.SNS sns = new SNSEvent.SNS();
-        sns.setTopicArn("topic-name-without-separator");
-
-        SNSEvent.SNSRecord record = new SNSEvent.SNSRecord();
-        record.setSns(sns);
-
-        SNSEvent event = new SNSEvent();
-        event.setRecords(List.of(record));
-
-        extractor.enrichSpan(event, span);
-
-        verify(span).setAttribute("messaging.system", "aws.sns");
-        verify(span).setAttribute("messaging.destination.name", "topic-name-without-separator");
-    }
-
-    @Test
-    void shouldNotEnrichSpanWithDestinationNameWhenTopicArnIsNull() {
-        SNSEvent.SNS sns = new SNSEvent.SNS();
-        sns.setTopicArn(null);
-
-        SNSEvent.SNSRecord record = new SNSEvent.SNSRecord();
-        record.setSns(sns);
-
-        SNSEvent event = new SNSEvent();
-        event.setRecords(List.of(record));
-
-        extractor.enrichSpan(event, span);
-
-        verify(span).setAttribute("messaging.system", "aws.sns");
+        verify(span).setAttribute("messaging.system", "aws.sqs");
+        verify(span).setAttribute("messaging.batch.message_count", 1);
         verify(span, never()).setAttribute(eq("messaging.destination.name"), anyString());
+    }
+
+    @Test
+    void shouldEnrichSpanWithBatchCountForMultipleMessages() {
+        SQSEvent.SQSMessage message1 = new SQSEvent.SQSMessage();
+        message1.setEventSourceArn("arn:aws:sqs:us-east-1:123456789012:test-queue");
+
+        SQSEvent.SQSMessage message2 = new SQSEvent.SQSMessage();
+        message2.setEventSourceArn("arn:aws:sqs:us-east-1:123456789012:test-queue");
+
+        SQSEvent event = new SQSEvent();
+        event.setRecords(List.of(message1, message2));
+
+        extractor.enrichSpan(event, span);
+
+        verify(span).setAttribute("messaging.system", "aws.sqs");
+        verify(span).setAttribute("messaging.batch.message_count", 2);
+        verify(span).setAttribute("messaging.destination.name", "test-queue");
     }
 }

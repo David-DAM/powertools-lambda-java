@@ -26,7 +26,9 @@ import io.opentelemetry.context.propagation.TextMapGetter;
 import io.opentelemetry.context.propagation.TextMapPropagator;
 import io.opentelemetry.contrib.awsxray.propagator.AwsXrayPropagator;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
+import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporterBuilder;
 import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
+import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporterBuilder;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.common.CompletableResultCode;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -265,27 +267,39 @@ public final class OpenTelemetryProvider {
         Map<String, String> headerMap = parseHeaders(headers);
 
         if (protocol == null || protocol.isBlank()) {
-            return OtlpGrpcSpanExporter.builder()
+            OtlpGrpcSpanExporterBuilder builder = OtlpGrpcSpanExporter.builder()
                     .setTimeout(EXPORT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                    .setEndpoint(endpoint)
-                    .setHeaders(() -> headerMap)
-                    .build();
+                    .setHeaders(() -> headerMap);
+
+            if (endpoint != null && !endpoint.isBlank()) {
+                builder.setEndpoint(endpoint);
+            }
+
+            return builder.build();
         }
 
         switch (protocol.trim().toLowerCase()) {
             case "grpc":
-                return OtlpGrpcSpanExporter.builder()
+                OtlpGrpcSpanExporterBuilder grpcBuilder = OtlpGrpcSpanExporter.builder()
                         .setTimeout(EXPORT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                        .setEndpoint(endpoint)
-                        .setHeaders(() -> headerMap)
-                        .build();
+                        .setHeaders(() -> headerMap);
+
+                if (endpoint != null && !endpoint.isBlank()) {
+                    grpcBuilder.setEndpoint(endpoint);
+                }
+
+                return grpcBuilder.build();
 
             case "http/protobuf":
-                return OtlpHttpSpanExporter.builder()
+                OtlpHttpSpanExporterBuilder httpBuilder = OtlpHttpSpanExporter.builder()
                         .setTimeout(EXPORT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
-                        .setEndpoint(endpoint)
-                        .setHeaders(() -> headerMap)
-                        .build();
+                        .setHeaders(() -> headerMap);
+
+                if (endpoint != null && !endpoint.isBlank()) {
+                    httpBuilder.setEndpoint(endpoint);
+                }
+
+                return httpBuilder.build();
 
             default:
                 throw new IllegalArgumentException(
